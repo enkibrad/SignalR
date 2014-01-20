@@ -135,22 +135,6 @@ namespace Microsoft.AspNet.SignalR.Transports
             return TaskAsyncHelper.Empty;
         }
 
-        protected internal override Task EnqueueOperation(Func<object, Task> writeAsync, object state)
-        {
-            Task task = base.EnqueueOperation(writeAsync, state);
-
-            // If PersistentConnection.OnConnected has not completed (as indicated by InitializeTcs),
-            // the queue will be blocked to prevent clients from prematurely indicating the connection has
-            // started, but we must keep receive loop running to continue processing commands and to
-            // prevent deadlocks caused by waiting on ACKs.
-            if (InitializeTcs == null || InitializeTcs.Task.IsCompleted)
-            {
-                return task;
-            }
-
-            return TaskAsyncHelper.Empty;
-        }
-
         private async Task ProcessSendRequest()
         {
             INameValueCollection form = await Context.Request.ReadForm();

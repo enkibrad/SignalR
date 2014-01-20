@@ -91,6 +91,7 @@
     <Compile Include="Hubs\UserProxy.cs" />
     <Compile Include="Infrastructure\AckHandler.cs" />
     <Compile Include="Configuration\DefaultConfigurationManager.cs" />
+    <Compile Include="Infrastructure\AckSubscriber.cs" />
     <Compile Include="Infrastructure\ArraySegmentTextReader.cs" />
     <Compile Include="Infrastructure\BinaryTextWriter.cs" />
     <Compile Include="Infrastructure\ConnectionManager.cs" />

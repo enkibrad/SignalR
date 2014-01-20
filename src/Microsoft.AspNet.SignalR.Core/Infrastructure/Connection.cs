@@ -240,11 +240,23 @@ namespace Microsoft.AspNet.SignalR.Infrastructure
         {
             var receiveContext = new ReceiveContext(this, callback, state);
 
-            return _bus.Subscribe(this,
+            var ackSubscription = _bus.Subscribe(new AckSubscriber(Identity),
+                                  messageId,
+                                  (result, s) => ((Connection)s).ProcessAcks(result),
+                                  maxMessages,
+                                  this);
+
+            var messageSubscription = _bus.Subscribe(this,
                                   messageId,
                                   (result, s) => MessageBusCallback(result, s),
                                   maxMessages,
                                   receiveContext);
+
+            return new DisposableAction(() =>
+            {
+                ackSubscription.Dispose();
+                messageSubscription.Dispose();
+            });
         }
 
         private static Task<bool> MessageBusCallback(MessageResult result, object state)
@@ -257,7 +269,7 @@ namespace Microsoft.AspNet.SignalR.Infrastructure
         private PersistentResponse GetResponse(MessageResult result)
         {
             // Do a single sweep through the results to process commands and extract values
-            ProcessResults(result);
+            ProcessCommands(result);
 
             Debug.Assert(WriteCursor != null, "Unable to resolve the cursor since the method is null");
 
@@ -297,31 +309,44 @@ namespace Microsoft.AspNet.SignalR.Infrastructure
                                                     _groups.Contains(signal));
         }
 
-        private void ProcessResults(MessageResult result)
+        private Task<bool> ProcessAcks(MessageResult result)
         {
-            result.Messages.Enumerate<object>(message => message.IsAck || message.IsCommand,
+            // We can ACK here without first processing commands, because by the time we ACK a message,
+            // that message has already been stored in the bus. E.g. Say we are ACKing adding a connection
+            // to a group. Once the group add command is on the bus, it is safe to send to the group,
+            // because the added connection will process the group addition before processing any
+            // messages sent after the ACK was triggered.
+
+            // any messages published in the future will have after the ACKed message on the bus.
+            result.Messages.Enumerate<object>(message => message.IsAck || message.WaitForAck,
+                                  (state, message) =>
+                                  {
+                                      if (message.IsAck)
+                                      {
+                                          _ackHandler.TriggerAck(message.CommandId);
+                                      }
+                                      else if (message.WaitForAck)
+                                      {
+                                          // Only send the ack if this command is waiting for it
+                                          // If we're on the same box and there's a pending ack for this command then
+                                          // just trip it
+                                          if (!_ackHandler.TriggerAck(message.CommandId))
+                                          {
+                                              _bus.Ack(_connectionId, message.CommandId).Catch();
+                                          }
+                                      }
+                                  }, null);
+
+            return TaskAsyncHelper.True;
+        }
+
+        private void ProcessCommands(MessageResult result)
+        {
+            result.Messages.Enumerate<object>(message => message.IsCommand,
                                               (state, message) =>
                                               {
-                                                  if (message.IsAck)
-                                                  {
-                                                      _ackHandler.TriggerAck(message.CommandId);
-                                                  }
-                                                  else if (message.IsCommand)
-                                                  {
-                                                      var command = _serializer.Parse<Command>(message.Value, message.Encoding);
-                                                      ProcessCommand(command);
-
-                                                      // Only send the ack if this command is waiting for it
-                                                      if (message.WaitForAck)
-                                                      {
-                                                          // If we're on the same box and there's a pending ack for this command then
-                                                          // just trip it
-                                                          if (!_ackHandler.TriggerAck(message.CommandId))
-                                                          {
-                                                              _bus.Ack(_connectionId, message.CommandId).Catch();
-                                                          }
-                                                      }
-                                                  }
+                                                  var command = _serializer.Parse<Command>(message.Value, message.Encoding);
+                                                  ProcessCommand(command);
                                               }, null);
         }
 
